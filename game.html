@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Catch the Ball Game with Paddle</title>
+<style>
+  body {
+    margin: 0;
+    background: linear-gradient(135deg, #89f7fe 0%, #66a6ff 100%);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+    overflow: hidden;
+  }
+  canvas {
+    background: #111;
+    border-radius: 12px;
+    box-shadow: 0 0 30px #0ff;
+    display: block;
+    position: relative;
+    z-index: 1;
+  }
+  #info {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #0ff;
+    font-weight: 700;
+    font-size: 18px;
+    font-family: monospace;
+    text-shadow: 0 0 15px #0ff;
+    user-select: none;
+    display: flex;
+    gap: 1.5rem;
+    z-index: 1000; /* Make sure info is on top */
+  }
+  #score {
+    font-size: 2.2rem;
+    color: #00ffff;
+    text-shadow: 0 0 8px #00ffff;
+    transition: transform 0.2s ease;
+    display: inline-block;
+  }
+  #score.pop {
+    transform: scale(1.4);
+  }
+  #gameOver {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #000c;
+    color: #0ff;
+    font-size: 2rem;
+    font-weight: 900;
+    padding: 2rem 3rem;
+    border-radius: 20px;
+    display: none;
+    text-align: center;
+    box-shadow: 0 0 50px #0ff;
+    z-index: 2000;
+  }
+  #restartBtn {
+    margin-top: 1.5rem;
+    padding: 0.6rem 1.2rem;
+    background: #0ff;
+    color: #000;
+    border: none;
+    font-weight: 700;
+    font-size: 1.2rem;
+    border-radius: 12px;
+    cursor: pointer;
+    box-shadow: 0 0 15px #0ff;
+    transition: background-color 0.3s ease;
+  }
+  #restartBtn:hover {
+    background: #33ffff;
+  }
+</style>
+</head>
+<body>
+
+<div id="info">
+  <div>Score: <span id="score">0</span></div>
+  <div>Lives: <span id="lives">3</span></div>
+  <div>Level: <span id="level">1</span></div>
+</div>
+<div id="gameOver">
+  Game Over!<br/>
+  Your Score: <span id="finalScore">0</span><br/>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  const scoreDisplay = document.getElementById('score');
+  const livesDisplay = document.getElementById('lives');
+  const levelDisplay = document.getElementById('level');
+  const gameOverScreen = document.getElementById('gameOver');
+  const finalScore = document.getElementById('finalScore');
+  const restartBtn = document.getElementById('restartBtn');
+
+  // Paddle properties
+  const paddle = {
+    width: 120,
+    height: 18,
+    x: (canvas.width - 120) / 2,
+    y: canvas.height - 50,
+    speed: 8,
+    dx: 0,
+  };
+
+  // Ball parameters
+  const ballRadius = 15;
+  const balls = [];
+  let spawnInterval;
+  let spawnTime = 1500; // ms
+  let ballBaseSpeed = 2.5;
+
+  let score = 0;
+  let lives = 3;
+  let level = 1;
+  let gameRunning = false;
+
+  // Audio context for sound effects
+  let audioCtx;
+  function playSound(type) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    osc.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+
+    if(type === 'catch') {
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      osc.type = 'triangle';
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+    } else if(type === 'miss') {
+      osc.frequency.setValueAtTime(220, audioCtx.currentTime);
+      osc.type = 'square';
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+    }
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.3);
+  }
+
+  // Handle keyboard
+  function keyDownHandler(e) {
+    if (e.key === 'ArrowRight' || e.key === 'Right') {
+      paddle.dx = paddle.speed;
+    } else if (e.key === 'ArrowLeft' || e.key === 'Left') {
+      paddle.dx = -paddle.speed;
+    }
+  }
+  function keyUpHandler(e) {
+    if ((e.key === 'ArrowRight' || e.key === 'Right') && paddle.dx > 0) {
+      paddle.dx = 0;
+    } else if ((e.key === 'ArrowLeft' || e.key === 'Left') && paddle.dx < 0) {
+      paddle.dx = 0;
+    }
+  }
+
+  // Touch controls (drag paddle)
+  let isTouching = false;
+  let lastTouchX = null;
+  canvas.addEventListener('touchstart', e => {
+    isTouching = true;
+    lastTouchX = e.touches[0].clientX;
+  });
+  canvas.addEventListener('touchmove', e => {
+    if (!isTouching) return;
+    const touchX = e.touches[0].clientX;
+    const diff = touchX - lastTouchX;
+    paddle.x += diff;
+    paddle.x = Math.min(Math.max(0, paddle.x), canvas.width - paddle.width);
+    lastTouchX = touchX;
+    e.preventDefault();
+  }, {passive:false});
+  canvas.addEventListener('touchend', () => {
+    isTouching = false;
+  });
+
+  // Colorful gradient for balls based on level
+  function getBallGradient(x, y) {
+    const grad = ctx.createRadialGradient(x, y, ballRadius / 3, x, y, ballRadius);
+    const colors = [
+      '#00ffff', '#ff00ff', '#ffff00', '#ff4500', '#00ff00',
+      '#1e90ff', '#ff1493', '#00ced1', '#ffa500'
+    ];
+    const c = colors[(level - 1) % colors.length];
+    grad.addColorStop(0, '#fff');
+    grad.addColorStop(1, c);
+    return grad;
+  }
+
+  // Ball class
+  class Ball {
+    constructor(x, y, speed) {
+      this.x = x;
+      this.y = y;
+      this.speed = speed;
+      this.caught = false;
+    }
+    update() {
+      this.y += this.speed;
+    }
+    draw() {
+      ctx.beginPath();
+      ctx.fillStyle = getBallGradient(this.x, this.y);
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = 18;
+      ctx.arc(this.x, this.y, ballRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.closePath();
+    }
+  }
+
+  function spawnBall() {
+    const x = Math.random() * (canvas.width - ballRadius * 2) + ballRadius;
+    const speed = ballBaseSpeed + Math.random() * 2 + (level - 1) * 0.5;
+    balls.push(new Ball(x, -ballRadius, speed));
+  }
+
+  function update() {
+    if (!gameRunning) return;
+
+    // Move paddle
+    paddle.x += paddle.dx;
+    if (paddle.x < 0) paddle.x = 0;
+    if (paddle.x + paddle.width > canvas.width) paddle.x = canvas.width - paddle.width;
+
+    // Update balls
+    balls.forEach((ball, i) => {
+      ball.update();
+
+      // Check if ball caught - paddle is a rectangle
+      if (!ball.caught && ball.y + ballRadius >= paddle.y && ball.y - ballRadius <= paddle.y + paddle.height) {
+        if (ball.x >= paddle.x && ball.x <= paddle.x + paddle.width) {
+          ball.caught = true;
+          balls.splice(i, 1);
+          score++;
+          playSound('catch');
+          checkLevelUp();
+          updateInfo();
+          return;
+        }
+      }
+
+      // Check if ball missed
+      if (ball.y - ballRadius > canvas.height) {
+        balls.splice(i, 1);
+        lives--;
+        playSound('miss');
+        if (lives <= 0) {
+          endGame();
+        }
+        updateInfo();
+      }
+    });
+  }
+
+  // Draw paddle (less bright)
+  function drawPaddle() {
+    ctx.shadowColor = '#0ff';
+    ctx.shadowBlur = 10; // reduced from 30 for less brightness
+    // create gradient manually
+    const grad = ctx.createLinearGradient(paddle.x, paddle.y, paddle.x + paddle.width, paddle.y);
+    grad.addColorStop(0, '#00ffff');
+    grad.addColorStop(0.5, '#ff00ff');
+    grad.addColorStop(1, '#00ffff');
+    ctx.fillStyle = grad;
+
+    ctx.fillRect(paddle.x, paddle.y, paddle.width, paddle.height);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    drawPaddle();
+
+    // Draw balls
+    balls.forEach(ball => ball.draw());
+  }
+
+  function updateInfo() {
+    scoreDisplay.textContent = score;
+    livesDisplay.textContent = lives;
+    levelDisplay.textContent = level;
+
+    // Pop animation on score
+    scoreDisplay.classList.add('pop');
+    setTimeout(() => {
+      scoreDisplay.classList.remove('pop');
+    }, 200);
+  }
+
+  function checkLevelUp() {
+    // Increase level every 10 points
+    if (score > 0 && score % 10 === 0) {
+      level++;
+      ballBaseSpeed += 0.7;
+      if(spawnTime > 600) spawnTime -= 150;
+      clearInterval(spawnInterval);
+      spawnInterval = setInterval(spawnBall, spawnTime);
+      updateInfo();
+    }
+  }
+
+  function endGame() {
+    gameRunning = false;
+    finalScore.textContent = score;
+    gameOverScreen.style.display = 'block';
+    clearInterval(spawnInterval);
+  }
+
+  function restartGame() {
+    score = 0;
+    lives = 3;
+    level = 1;
+    ballBaseSpeed = 2.5;
+    spawnTime = 1500;
+    balls.length = 0;
+    paddle.x = (canvas.width - paddle.width) / 2;
+    gameOverScreen.style.display = 'none';
+    updateInfo();
+    spawnInterval = setInterval(spawnBall, spawnTime);
+    gameRunning = true;
+    loop();
+  }
+
+  function loop() {
+    if (!gameRunning) return;
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // Initial event listeners
+  document.addEventListener('keydown', keyDownHandler);
+  document.addEventListener('keyup', keyUpHandler);
+  restartBtn.addEventListener('click', () => {
+    restartGame();
+  });
+
+  // Start the game automatically
+  restartGame();
+})();
+</script>
+</body>
+</html>
